@@ -1,0 +1,114 @@
+; todo: figure out how to not make this look like jquery
+
+macro @ez80.word size*, @value*
+	local value, offset, rel_addr
+	value := @value
+	offset := $
+	if offset relativeto $.app.data.relocation_base
+		rel_addr := offset - $.app.data.relocation_base + $.app.data - $.app.code.relocation_base
+	else
+		rel_addr := offset - $.app.code.relocation_base
+	end if
+	if value relativeto $.app.code.relocation_base
+		@ez80.word size, -1
+		$.app.relocations equ rel_addr, value - $.app.code.relocation_base
+	else if value relativeto $.app.data.relocation_base
+		@ez80.word size, -1
+		$.app.relocations equ rel_addr, (value - $.app.data.relocation_base) or $800000
+	else
+		@ez80.word size, value
+	end if
+end macro
+
+section .app.header
+app:
+.start:
+	db	$81,$0f
+	dd	(.signature_offset1) bswap 4
+.signature_offset1 := .signature - $
+	db	$81,$12,$13,$0f
+	db	$81,$2d,lengthof __app_version + 1,__app_version,$00
+	db	$81,$32,$59,$00
+	db	$81,lengthof __app_name,__app_name
+	db	$81,$a1,$07
+	db	$03,$26,$09,$00
+	db	$21,$bb,$6e,$dc
+.freespace := 247 - ($-app.start)
+	db	$00,$0d,.freespace
+	db	.freespace dup $ff
+	db	$81,$7f
+	dd	(.signature_offset2) bswap 4
+.signature_offset2 := .signature - $
+.header_start:
+	db	'eZ8'
+.exe:
+	dq	__app_name
+	db	0,3
+	db	0,0
+	dl	0
+	dl	.code - .header_start
+	dl	.data - .header_start
+	dl	.data_end - .data
+	dl	.code - .header_start ; entry point
+	dl	0
+	dl	0 ; todo: library table
+	dl	.info_string - .header_start
+	dl	0
+
+	postpone
+		virtual
+			irpv relocation, $.app.relocations
+				dl	relocation
+			end irpv
+			load relocation_table: $-$$ from $$
+		end virtual
+	end postpone
+
+	db	relocation_table
+
+app.code:
+
+	$.app.code.relocation_base = app.code
+
+	private	app.code
+	private	app.relocations
+	extern	__app_name
+	extern	__app_version
+
+section .app.info_string
+app.info_string:
+	db	__app_desc,0
+app.data:
+$.app.data:
+
+	private	app.data
+	extern	__app_desc
+
+section .app.footer
+app.data_end:
+app.signature:
+	db	$02,$3e,$01,$00
+	db	256 dup $ff
+app.end:
+
+	private	app.signature
+	private	app.end
+	private	app.data_end
+
+section .app.init
+	scf
+	sbc	hl,hl
+	ld	(hl),2
+	call	prgm_init
+	jp	$20160 ; JForceCmdNoChar
+prgm_init:
+
+section .dummy ; test
+$.app.data.relocation_base:
+
+section .fini
+fini_base:
+	private fini_base
+
+section .jump_to_fini
+	jp	fini_base
