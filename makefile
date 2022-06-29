@@ -1,8 +1,7 @@
-# todo: determine this automatically
-APP_TOOLS_DIR = app_tools
+APP_TOOLS_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 INIT_LOC = 0
-LINKER_SCRIPT = app_tools/linker_script
+LINKER_SCRIPT = $(APP_TOOLS_DIR)/linker_script
 OUTPUT_MAP = NO
 
 DEPS := $(APP_TOOLS_DIR)/app.src $(APP_TOOLS_DIR)/makefile $(DEPS)
