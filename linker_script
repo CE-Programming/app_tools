@@ -17,16 +17,16 @@ if DEBUG
 end if
 
 locate .app.header element at .app.header.element
-order .app.header, .app.init, .init.libs, .init.clock, .init.reruncheck, .init, .jump_to_fini, .text, .rodata, .app.info_string
+order .app.header, .app.init, .init.libs, .init.clock, .init.reruncheck, .init, .jp_fini, .text, .rodata, .app.info_string
 
-locate .dummy element at .dummy.element + .app.info_string.base + .app.info_string.length - .app.header.element
-order .dummy, .fini, .data, .libs
+locate .fini element at .fini.element + .app.info_string.base + .app.info_string.length - .app.header.element
+order .fini, .data, .libs, .jp_post_libs
 
-locate .app.footer at .app.info_string.base + .app.info_string.length + .libs.base + .libs.length - .dummy.base
+locate .app.footer at .app.info_string.base + .app.info_string.length + .jp_post_libs.base + .jp_post_libs.length - .fini.base
 
 
 split : .init_array, .ctors, .dtors, .fini_array
-precious .init.libs if .libs.length, .libs, .init_array, .ctors, .dtors, .fini_array, .app.header, .app.init, .app.info_string, .app.footer, .dummy, .jump_to_fini
+precious .init.libs if .libs.length, .libs, .init_array, .ctors, .dtors, .fini_array, .app.header, .app.init, .app.info_string, .app.footer, .jp_fini, .jp_post_libs
 provide ___low_bss = .bss.base
 provide ___len_bss = .bss.length
 provide ___heaptop = .bss.high

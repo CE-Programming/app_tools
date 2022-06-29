@@ -96,19 +96,22 @@ app.end:
 	private	app.data_end
 
 section .app.init
-	scf
-	sbc	hl,hl
-	ld	(hl),2
 	call	prgm_init
 	jp	$20160 ; JForceCmdNoChar
 prgm_init:
 
-section .dummy ; test
-$.app.data.relocation_base:
-
 section .fini
 fini_base:
+$.app.data.relocation_base:
 	private fini_base
 
-section .jump_to_fini
+section .init.clock
+post_libs:
+	private	post_libs
+
+section .jp_fini
 	jp	fini_base
+
+section .jp_post_libs
+	nop	; glares at Mateo
+	jp	post_libs
