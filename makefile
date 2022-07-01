@@ -4,7 +4,9 @@ INIT_LOC = 0
 LINKER_SCRIPT = $(APP_TOOLS_DIR)/linker_script
 OUTPUT_MAP = NO
 
-DEPS := $(APP_TOOLS_DIR)/app.src $(APP_TOOLS_DIR)/makefile $(DEPS)
+APP_SRC_FILE = $(APP_TOOLS_DIR)/app.src
+
+DEPS := $(APP_SRC_FILE) $(APP_TOOLS_DIR)/makefile $(DEPS)
 TEMP := $(EXTRA_LDFLAGS)
 
 EXTRA_LDFLAGS = \
@@ -13,15 +15,20 @@ EXTRA_LDFLAGS = \
 	-i $(call QUOTE_ARG,provide __app_desc = "$(DESCRIPTION)") \
 	$(TEMP)
 
-app: _app
+default: installer
 
 include $(shell cedev-config --makefile)
 
 TARGET8EK ?= $(NAME).8ek
+APP_INST_NAME ?= APPINST
 
-_app: $(BINDIR)/$(TARGET8EK)
+app: $(BINDIR)/$(TARGET8EK)
+installer: $(BINDIR)/AppInstA.8xv
 
-$(BINDIR)/$(TARGET8EK): $(BINDIR)/$(TARGETBIN) $(APP_TOOLS_DIR)/make_app.py
-	python3 $(APP_TOOLS_DIR)/make_app.py $(BINDIR)/$(TARGETBIN) $(BINDIR)/$(TARGET8EK) $(NAME)
+$(BINDIR)/$(TARGET8EK): $(BINDIR)/$(TARGETBIN) $(APP_TOOLS_DIR)/make_8ek.py
+	python3 $(APP_TOOLS_DIR)/make_8ek.py $(BINDIR)/$(TARGETBIN) $(BINDIR)/$(TARGET8EK) $(NAME)
 
-.PHONY: _app app
+$(BINDIR)/AppInstA.8xv: $(BINDIR)/$(TARGETBIN) $(APP_TOOLS_DIR)/installer.bin $(APP_TOOLS_DIR)/make_installer.py
+	python3 $(APP_TOOLS_DIR)/make_installer.py $(BINDIR)/$(TARGETBIN) $(BINDIR) $(NAME) $(APP_INST_NAME)
+
+.PHONY: default installer app
