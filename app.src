@@ -97,7 +97,13 @@ app.end:
 
 section .app.init
 	call	prgm_init
-	jp	$20160 ; JForceCmdNoChar
+	ld	de,($D0118C)	; $asm_prgm_size
+	ld	hl,$D1A881	; userMem
+	call	$20590		; DelMem
+	or	a,a
+	sbc	hl,hl
+	ld	($D0118C),hl	; $asm_prgm_size
+	jp	$20160		; JForceCmdNoChar
 prgm_init:
 
 section .fini
