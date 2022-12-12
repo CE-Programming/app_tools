@@ -60,6 +60,25 @@ app:
 			irpv relocation, $.app.relocations
 				dl	relocation
 			end irpv
+			.num_relocations = ($-$$) / 6
+			; sort stuff
+			repeat .num_relocations - 1
+				.i = % - 1
+				load .min_val : 3 from $$ + 6 * .i
+				.min_pos = .i
+				repeat .num_relocations - .i - 1
+					.j = .i + %
+					load .x : 3 from $$ + 6 * .j
+					if .x < .min_val
+						.min_val = .x
+						.min_pos = .j
+					end if
+				end repeat
+				load	.min_reloc : 6 from $$ + 6 * .min_pos
+				load	.first_reloc : 6 from $$ + 6 * .i
+				store	.min_reloc : 6 at $$ + 6 * .i
+				store	.first_reloc : 6 at $$ + 6 * .min_pos
+			end repeat
 			load relocation_table: $-$$ from $$
 		end virtual
 	end postpone
