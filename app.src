@@ -9,8 +9,11 @@ macro @ez80.word size*, @value*
 	offset := $
 	if offset relativeto $.app.data.relocation_base
 		rel_addr := offset - $.app.data.relocation_base + $.app.data - $.app.code.relocation_base
-	else
+		assert rel_addr relativeto $.app.data - $.app.code.relocation_base
+	else if offset relativeto $.app.data
 		rel_addr := offset - $.app.code.relocation_base
+	else
+		assert offset relativeto 0
 	end if
 	if value relativeto $.app.code.relocation_base
 		@ez80.word size, -1
@@ -19,6 +22,7 @@ macro @ez80.word size*, @value*
 		@ez80.word size, -1
 		$.app.relocations equ rel_addr, (value - $.app.data.relocation_base) or $800000
 	else
+		assert value relativeto 0
 		@ez80.word size, value
 	end if
 end macro
