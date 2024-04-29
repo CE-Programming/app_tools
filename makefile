@@ -1,4 +1,4 @@
-APP_TOOLS_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+APP_TOOLS_DIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))
 
 INIT_LOC = 0
 LINKER_SCRIPT = $(APP_TOOLS_DIR)/linker_script
