@@ -1,7 +1,7 @@
 APP_TOOLS_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 INIT_LOC = 0
-LINKER_SCRIPT = $(APP_TOOLS_DIR)/linker_script
+LINKER_SCRIPT = linker_script_portable
 OUTPUT_MAP = NO
 
 APP_SRC_FILE = $(APP_TOOLS_DIR)/app.src
@@ -22,6 +22,9 @@ APP_INST_NAME ?= APPINST
 
 app: $(BINDIR)/$(TARGET8EK)
 installer: $(BINDIR)/AppInstA.8xv
+
+linker_script_portable: $(APP_TOOLS_DIR)/linker_script
+	envsubst < $(APP_TOOLS_DIR)/linker_script > $@
 
 $(BINDIR)/$(TARGET8EK): $(BINDIR)/$(TARGETBIN) $(APP_TOOLS_DIR)/make_8ek.py
 	python3 $(APP_TOOLS_DIR)/make_8ek.py $(BINDIR)/$(TARGETBIN) $(BINDIR)/$(TARGET8EK) $(NAME)
