@@ -13,20 +13,31 @@ EXTRA_LDFLAGS += \
 	-i $(call QUOTE_ARG,provide __app_version = "$(APP_VERSION)") \
 	-i $(call QUOTE_ARG,provide __app_desc = "$(DESCRIPTION)")
 
-default: installer
+default: install_prog
 
 include $(shell cedev-config --makefile)
 
 TARGET8EK ?= $(NAME).8ek
 APP_INST_NAME ?= APPINST
+APP_INST_DESC ?= App Installer
+APP_INST_VAR_PREFIX ?= AppIns
 
 app: $(BINDIR)/$(TARGET8EK)
-installer: $(BINDIR)/AppInstA.8xv
+install_prog: $(BINDIR)/AppIns0.8xv $(BINDIR)/INSTALL.8xp
 
 $(BINDIR)/$(TARGET8EK): $(BINDIR)/$(TARGETBIN) $(APP_TOOLS_DIR)/make_8ek.py
 	python3 $(APP_TOOLS_DIR)/make_8ek.py $(BINDIR)/$(TARGETBIN) $(BINDIR)/$(TARGET8EK) $(NAME)
 
-$(BINDIR)/AppInstA.8xv: $(BINDIR)/$(TARGETBIN) $(APP_TOOLS_DIR)/installer.bin $(APP_TOOLS_DIR)/make_installer.py
-	python3 $(APP_TOOLS_DIR)/make_installer.py $(BINDIR)/$(TARGETBIN) $(BINDIR) $(NAME) $(APP_INST_NAME)
+$(BINDIR)/AppIns0.8xv: $(BINDIR)/$(TARGETBIN) $(APP_TOOLS_DIR)/make_segments.py
+	python3 $(APP_TOOLS_DIR)/make_segments.py $(BINDIR)/$(TARGETBIN) $(BINDIR)
 
-.PHONY: default installer app
+$(BINDIR)/INSTALL.8xp:
+	BINDIR=$(realpath $(BINDIR)) \
+	OBJDIR=$(realpath $(OBJDIR))/inst \
+	APP_BIN=$(realpath $(BINDIR)/$(TARGETBIN)) \
+	NAME=$(APP_INST_NAME) \
+	DESCRIPTION="$(APP_INST_DESC)" \
+	VAR_PREFIX="$(APP_INST_VAR_PREFIX)" \
+	$(MAKE) -C $(APP_TOOLS_DIR)/installer
+
+.PHONY: default install_prog app
