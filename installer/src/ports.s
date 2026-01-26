@@ -1,4 +1,4 @@
-; Copyright 2015-2021 Matt "MateoConLechuga" Waltz
+; Copyright 2015-2026 Matt "MateoConLechuga" Waltz
 ;
 ; Redistribution and use in source and binary forms, with or without
 ; modification, are permitted provided that the following conditions are met:
@@ -26,17 +26,16 @@
 ; ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 ; POSSIBILITY OF SUCH DAMAGE.
 
-assume adl = 1
-section .text
+	.assume	adl=1
+	.section	.text
 
-define ti? ti
-namespace ti?
-?StrCmpre			:= 0021DB0h
-?heapBot			:= 0D1887Ch ; 1024 bytes used for flash ram routines, rest used rarely
-?flags				:= 0D00080h ; location of OS Flags (+-80h)
-?_frameset0        	        := 0000130h
-end namespace
+	.equ	ti.flags, 0xD00080
+	.equ	ti.StrCmpre, 0x021DB0
+	.equ	ti.heapBot, 0xD1887C
+	.equ	ti._frameset0, 0x000130
+	.equ	ti.textShadow, 0xD006C0
 
+	.global	_port_setup
 _port_setup:
 	push	ix
 	call	port_setup
@@ -45,84 +44,90 @@ _port_setup:
 
 port_setup:
 	di
-	ld	hl,ports_relocate
-	ld	de,ports_relocate.dest
-	ld	bc,ports_relocate.size
-	ldir
 	ld	b,1
+	ld	hl,port_reloc
+	ld	bc,port_reloc.size
+	ld	de,___port_reloc
+	ldir
 	or	a,a
 	sbc	hl,hl
-.find:
+port_setup.find:
 	ld	a,(hl)
 	inc	hl
 	cp	a,$80
-	jq	z,.found_80
+	jr	z,port_setup.found_80
 	cp	a,$ed
-	jq	nz,.find
+	jr	nz,port_setup.find
 	ld	a,(hl)
 	sub	a,$41
-	jq	z,.found_ed41
+	jr	z,port_setup.found_ed41
 	cp	a,$73
-	jq	nz,.find
+	jr	nz,port_setup.find
 	dec	b
 	dec	hl
 	ld	(port_new.target),hl
 	inc	hl
-	jq	.find
-.found_80:
+	jr	port_setup.find
+port_setup.found_80:
 	ld	a,(hl)
 	cp	a,$0f
-	jq	nz,.find
+	jr	nz,port_setup.find
 	and	a,b
 	ret	nz
 	ld	hl,port_new.unlock
-	jq	.store_smc
-.found_ed41:
+	jr	port_setup.store_smc
+port_setup.found_ed41:
 	dec	hl
 	ld	(port_old.target),hl
 	inc	hl
 	push	hl
 	pop	ix
 	bit	0,(ix+4)
-	jq	nz,.find
+	jr	nz,port_setup.find
 	ld	hl,port_old.unlock
-.store_smc:
+port_setup.store_smc:
 	ld	(_port_unlock.code),hl
 	ret
 
-ports_relocate.dest = $d09466
-
-virtual at ports_relocate.dest
-
-port_old:
-.unlock:
-	call	.unlockhelper
-.unlockfinish:
+	; these functions must be placed below 0xD1887C
+	; use textShadow (0xD006C0) for this purpose
+	; must be placement independent, cannot use absolute jumps
+port_reloc:
+	.equ	___port_reloc, ti.textShadow
+	.equ	___port_unlock, ___port_reloc
 	ld	a,$8c
 	out0	($24),a
 	in0	a,($06)
 	or	a,4
 	out0	($06),a
 	ret
-.unlockhelper:
+	.equ	___port_lock, ___port_reloc + ($-port_reloc)
+	xor	a,a
+	out0	($28),a
+	in0	a,($06)
+	res	2,a
+	out0	($06),a
+	ld	a,$88
+	out0	($24),a
+	ld	a,$d1
+	out0	($22),a
+	ret
+	.equ	port_reloc.size, $-port_reloc
+
+	; these functions are okay to be in user ram
+port_old.unlock:
+	ld	iy,$d00080
+	call	port_old.unlockhelper
+	jp	___port_unlock
+port_old.unlockhelper:
 	call	ti._frameset0
 	push	de
 	ld	bc,$0022
 	jp	0
-.target := $-3
-.write:
-	ld	de,$c979ed
-	ld	hl,ti.heapBot - 3
-	ld	(hl),de
-	jp	(hl)
-.read:
-	ld	de,$c978ed
-	ld	hl,ti.heapBot - 3
-	ld	(hl),de
-	jp	(hl)
+	.equ	port_old.target, $-3
 
-port_new:
-.unlock:
+port_new.unlock:
+	ld	iy,$d00080
 	ld	de,$d19881
 	push	de
 	or	a,a
@@ -131,12 +136,12 @@ port_new:
 	ld	de,$03d1
 	push	de
 	push	hl
-	call	.unlockhelper
+	call	port_new.unlockhelper
 	ld	hl,12
 	add	hl,sp
 	ld	sp,hl
-	jq	port_old.unlockfinish
-.unlockhelper:
+	jp	___port_unlock
+port_new.unlockhelper:
 	push	hl
 	ex	(sp),ix
 	add	ix,sp
@@ -148,49 +153,28 @@ port_new:
 	ld	de,$0f22
 	add	hl,sp
 	jp	0
-.target := $-3
-.lock:
-	xor	a,a
-	out0	($28),a
-	in0	a,($06)
-	res	2,a
-	out0	($06),a
-	ld	a,$88
-	out0	($24),a
-	ld	a,$d1
-	out0	($22),a
-	ret
+	.equ	port_new.target, $-3
 
-port_read:
-	push	de,bc,hl
-	call	port_old.read
-	jq	_port_lock.pop
-
-port_write:
-	push	de,bc,hl
-	call	port_old.write
-	jq	_port_lock.pop
-
+	.global	_port_unlock
 _port_unlock:
-	push	ix,de,bc,hl
+	push	ix
+	push	de
+	push	bc
+	push	hl
 	call	0
-.code := $-3
-	jq	_port_lock.pop
+	.equ	_port_unlock.code, $-3
+	jr	_port_lock.pop
 
+	.global	_port_lock
 _port_lock:
-	push	ix,de,bc,hl
-	call	port_new.lock
-.pop:
-	pop	hl,bc,de,ix
+	push	ix
+	push	de
+	push	bc
+	push	hl
+	call	___port_lock
+_port_lock.pop:
+	pop	hl
+	pop	bc
+	pop	de
+	pop	ix
 	ret
-
-ports_relocate.size = $-$$
-load ports_relocate.data:ports_relocate.size from $$
-end virtual
-
-ports_relocate:
-	emit ports_relocate.size, ports_relocate.data
-
-public	_port_setup
-public	_port_unlock
-public	_port_lock

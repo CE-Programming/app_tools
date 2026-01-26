@@ -11,42 +11,77 @@
 #include "app.h"
 #include "flash.h"
 #include "ports.h"
-#include "segments.h"
 
-static bool check_variable_overlaps(const void *app_start) {
-    // The OS needs a completely FF page between the archive and the first app, for some reason.
+#define MAX_APPVARS 99
+
+enum
+{
+    SUCCESS,
+    ALREADY_INSTALLED,
+    MISSING_VAR,
+    PORT_SETUP_FAILED,
+    NO_SPACE,
+};
+
+struct appvar
+{
+    uint8_t *data;
+    uint24_t size;
+    uintptr_t app_offset;
+};
+
+static struct appvar appvars[MAX_APPVARS];
+static char app_name[10];
+
+static bool check_variable_overlaps(const uint8_t *app_start)
+{
     uint8_t first_erased_page = ADDR_TO_PAGE(app_start) - 1;
 
     void *entry = os_GetSymTablePtr();
     uint24_t type;
-    uint24_t nameLength;
+    uint24_t length;
     char name[9];
     void *data;
-    while ((entry = os_NextSymEntry(entry, &type, &nameLength, name, &data)) != NULL) {
-        if (data >= (void*)os_RamStart) {
-            // Variables in RAM will not be erased, ignore it
+
+    while ((entry = os_NextSymEntry(entry, &type, &length, name, &data)) != NULL)
+    {
+        if (data >= (void*)os_RamStart)
+        {
             continue;
         }
-        uint8_t page = ADDR_TO_PAGE(data);
-        if (page < first_erased_page) {
-            // This variable is on a page that will not be erased, ignore it
+
+        const uint8_t page = ADDR_TO_PAGE(data);
+        if (page < first_erased_page)
+        {
             continue;
         }
+
         bool ours = false;
-        for (const struct segment *segment = segments; segment->type != 0; segment++) {
-            if (strncmp(segment->file, name, nameLength) == 0) {
-                if (page >= ADDR_TO_PAGE(app_start + segment->app_offset)) {
-                    // This variable would be overwritten before it has a chance to be copied into its desination
-                    dbg_printf("Variable %.09s (page 0x%x) would be erased before being copied to %p\n", name, page, app_start + segment->app_offset);
+        for (uint8_t i = 0; i < MAX_APPVARS; ++i)
+        {
+            char appvar_name[10];
+
+            sprintf(name, APPVAR_PREFIX "%u", i);
+
+            if (strncmp(name, appvar_name, length) == 0)
+            {
+                const uint24_t addr = (uintptr_t)app_start + (APPVAR_SPLIT_SIZE * i);
+
+                if (page >= ADDR_TO_PAGE(addr))
+                {
+                    dbg_printf("Variable %s (page 0x%x) would be erased before being copied to 0x%x\n",
+                        name, page, addr);
+
                     return false;
                 }
                 ours = true;
-                break;
+                break; 
             }
         }
-        if (!ours) {
-            // This is not one of our variables, and would be overwritten
-            dbg_printf("Non-installer variable %.09s @ %p overlaps app\n", name, data);
+
+        if (!ours)
+        {
+            dbg_printf("Non-installer variable %s @ %p overlaps app\n", name, data);
             return false;
         }
     }
@@ -54,110 +89,242 @@ static bool check_variable_overlaps(const void *app_start) {
     return true;
 }
 
-static void *pmax(void *a, void *b) {
-    if (a > b) return a;
-    else return b;
+static void *pmax(void *a, void *b)
+{
+    return a > b ? a : b;
 }
 
-static void *pmin(void *a, void *b) {
-    if (a < b) return a;
-    else return b;
+static void *pmin(void *a, void *b)
+{
+    return a < b ? a : b;
 }
 
-static bool install(void) {
-    bool is_installed = os_FindAppStart(app_name) != NULL;
+static int install(void)
+{
+    uint24_t app_size = 0;
 
-    if (is_installed) {
-        // todo: option to delete + reinstall app from here
-        os_PutStrFull("Already installed - delete app from Mem Mgmt menu to reinstall");
-        return false;
+    if (port_setup())
+    {
+        return PORT_SETUP_FAILED;
     }
 
-    if (port_setup()) {
-        os_PutStrFull("Unsupported OS version");
-        return false;
+    struct appvar *appvar = &appvars[0];
+    for (uint8_t i = 0; i < MAX_APPVARS; ++i)
+    {
+        char name[10];
+        void *data;
+        const int namelen = sprintf(name, APPVAR_PREFIX "%u", i);
+
+        if (os_ChkFindSym(OS_TYPE_APPVAR, name, NULL, &data))
+        {
+            uint8_t *d = data;
+
+            if (d < os_RamStart)
+            {
+                d += 10 + namelen;
+            }
+        
+            appvar->size = *(uint16_t*)d;
+            appvar->data = d + 2;
+            appvar->app_offset = app_size;
+
+            /* first appvar contains app name */
+            if (i == 0)
+            {
+                strncpy(app_name, (const char *)(appvar->data + 256 + 3), sizeof app_name);
+
+                dbg_printf("App %s\n", app_name);
+
+                if (os_FindAppStart(app_name))
+                {
+                    return ALREADY_INSTALLED;
+                }
+            }
+
+            dbg_printf("AppVar %u (%s, %u bytes)\n", i, name, (uint24_t)appvar->size);
+
+            app_size += appvar->size;
+
+            if (appvar->size != APPVAR_SPLIT_SIZE)
+            {
+                break;
+            }
+
+            appvar++;
+        }
+        else
+        {
+            return MISSING_VAR;
+        }
     }
 
-    size_t total_size = 0;
+    /* size at end of application stored in flash */
+    appvar->size += sizeof(uint24_t);
 
-    struct segment *segment;
-    for (segment = segments; segment->type != 0; segment++) {
-        total_size += segment->size;
-        void *file_data;
-        if (!os_ChkFindSym(segment->type, segment->file, NULL, &file_data)) {
-            os_PutStrFull("Missing variable: ");
-            os_PutStrFull(segment->file);
-            return false;
-        }
-        if (file_data < (void*)os_RamStart) {
-            file_data += 10 + strlen(segment->file);
-        }
-        uint16_t file_size = *(const uint16_t*) file_data;
-        file_data += 2;
-        dbg_printf("Segment %u (%.8s) var size %u (expected >= %u) at %p\n", segment - segments, segment->file, file_size, segment->size, file_data);
-        if (file_size < segment->file_offset + segment->size) {
-            os_PutStrFull("Invalid variable (too short): ");
-            os_PutStrFull(segment->file);
-            return false;
-        }
-        segment->src = file_data + segment->file_offset;
-    }
-
-    void *app_end = find_last_app();
-    void *app_start = app_end - total_size;
+    uint8_t *app_end = find_last_app();
+    uint8_t *app_start = app_end - app_size - sizeof(uint24_t);
 
     dbg_printf("App from %p to %p\n", app_start, app_end);
 
-    if (!check_variable_overlaps(app_start)) {
-        os_PutStrFull("No space, try deleting vars, then Garbage Collect");
-        return false;
+    if (!check_variable_overlaps(app_start))
+    {
+        return NO_SPACE;
     }
 
-    os_PutStrFull("Installing. This takes a  while, do not reset!");
+    os_PutStrFull("Installing: ");
+    os_PutStrFull(app_name);
     os_NewLine();
+    os_PutStrFull("Please wait...");
+    os_NewLine();
+    os_NewLine();
+    os_PutStrFull("This may take a while.");
+    os_NewLine();
+    os_PutStrFull("Do not reset!");
 
     void *written = app_end;
+    bool wrote_size = false;
 
-    segment--; // last segment
-    for (uint8_t page = ADDR_TO_PAGE(app_end); page >= ADDR_TO_PAGE(app_start) && segment >= &segments[0]; page--) {
-        while (written > PAGE_TO_ADDR(page) && segment >= &segments[0]) {
-            void *seg_start = app_start + segment->app_offset;
-            void *dst_end = pmin(seg_start + segment->size, PAGE_TO_ADDR(page + 1));
-            void *src_start = segment->src;
-            void *dst_start = pmax(seg_start, PAGE_TO_ADDR(page));
+    for (uint8_t page = ADDR_TO_PAGE(app_end); page >= ADDR_TO_PAGE(app_start) && appvar >= &appvars[0]; page--)
+    {
+        while (written > PAGE_TO_ADDR(page) && appvar >= &appvars[0])
+        {
+            uint8_t *seg_start = app_start + appvar->app_offset;
+            uint8_t *dst_end = pmin(seg_start + appvar->size, PAGE_TO_ADDR(page + 1));
+            uint8_t *src_start = appvar->data;
+            uint8_t *dst_start = pmax(seg_start, PAGE_TO_ADDR(page));
+
             src_start += dst_start - seg_start;
-            dbg_printf("Writing segment %u (%8.8s) (%p-%p) %p-%p -> (page %02x) %p-%p\n", segment - segments, segment->file, segment->src, segment->src + segment->size, src_start, src_start + (dst_end - dst_start), page, dst_start, dst_end);
-            flash_write(dst_start, src_start, (dst_end - dst_start));
+
+            dbg_printf("Writing segment %u (%p-%p) %p-%p -> (page %02x) %p-%p\n",
+                appvar - appvars,
+                appvar->data,
+                appvar->data + appvar->size,
+                src_start,
+                src_start + (dst_end - dst_start),
+                page,
+                dst_start,
+                dst_end);
+
+            if (!wrote_size)
+            {
+                flash_write(dst_start, src_start, (dst_end - dst_start) - sizeof(uint24_t));
+                flash_write(dst_end - sizeof(uint24_t), &app_size, sizeof(uint24_t));
+                wrote_size = true;
+            }
+            else
+            {
+                flash_write(dst_start, src_start, (dst_end - dst_start));
+            }
+
             dbg_printf("Written\n");
+
             written = dst_start;
-            if (dst_start == seg_start) {
-                segment--;
+            if (dst_start == seg_start)
+            {
+                appvar--;
             }
         }
+
         dbg_printf("Erasing page %02x\n", page - 1);
         flash_erase(page - 1);
         dbg_printf("Erased\n");
     }
 
-    dbg_printf("Copied data segments\n");
+    dbg_printf("Copied app data\n");
 
     fix_relocations(app_start);
 
     dbg_printf("Fixed relocations");
 
-    return true;
+    return SUCCESS;
 }
 
+void delete_vars(void)
+{
+    for (uint8_t i = 0; i < MAX_APPVARS; ++i)
+    {
+        char name[10];
 
-int main() {
+        sprintf(name, APPVAR_PREFIX "%u", i);
+
+        if (os_ChkFindSym(OS_TYPE_APPVAR, name, NULL, NULL))
+        {
+            delete_var(name, OS_TYPE_APPVAR);
+        }
+        else
+        {
+            break;
+        }
+    }
+}
+
+int main(int argc, char **argv)
+{
+    int error;
+
+    (void)argc;
+
     os_ClrHome();
-    bool succeeded = install();
-    if (!succeeded) {
-        os_NewLine();
-        os_PutStrFull("Installation failed");
-    } else {
-        os_PutStrFull("Installed - open from apps menu");
+
+    error = install();
+
+    os_ClrHome();
+
+    switch (error)
+    {
+        case SUCCESS:
+            os_PutStrFull("Successfully installed.");
+            os_NewLine();
+            os_PutStrFull("App: ");
+            os_PutStrFull(app_name);
+            os_NewLine();
+            os_NewLine();
+            os_PutStrFull("Delete installer files?");
+            if (confirm_delete_vars())
+            {
+                delete_var(argv[0], OS_TYPE_PROT_PRGM);
+                delete_vars();
+            }
+            return SUCCESS;
+            break;
+
+        case ALREADY_INSTALLED:
+            os_PutStrFull("Already installed.");
+            os_NewLine();
+            os_PutStrFull("App: ");
+            os_PutStrFull(app_name);
+            os_NewLine();
+            os_NewLine();
+            os_PutStrFull("Delete app from the");
+            os_NewLine();
+            os_PutStrFull("mem menu to reinstall.");
+            break;
+
+        case MISSING_VAR:
+            os_PutStrFull("Install failed.");
+            os_NewLine();
+            os_PutStrFull("Missing an appvar.");
+            break;
+
+        case PORT_SETUP_FAILED:
+            os_PutStrFull("Install failed.");
+            os_NewLine();
+            os_PutStrFull("Unsupported OS version.");
+            break;
+
+        case NO_SPACE:
+            os_PutStrFull("Install failed.");
+            os_NewLine();
+            os_PutStrFull("Out of archive space.");
+            os_NewLine();
+            os_PutStrFull("Try running the");
+            os_NewLine();
+            os_PutStrFull("GarbageCollect command.");
+            break;
     }
 
+    while (os_GetCSC());
     while (!os_GetCSC());
+
+    return error;
 }

@@ -1,5 +1,7 @@
-section .text
+	.assume	adl=1
+	.section	.text
 
+	.global _flash_erase
 _flash_erase:
 	ld	iy,$d00080
 	push	ix
@@ -7,19 +9,16 @@ _flash_erase:
 	add	ix,sp
 	call	_port_unlock
 	ld	a,(ix+6)
-	call	.wrap
+	call	.L.wrap
 	call	_port_lock
 	pop	ix
 	ret
-.wrap:
+.L.wrap:
 	ld	bc,$f8
 	push	bc
 	jp	$02dc
 
-public _flash_erase
-
-section .text
-
+	.global _flash_write
 _flash_write:
 	ld	iy,$d00080
 	push	ix
@@ -33,8 +32,3 @@ _flash_write:
 	call	_port_lock
 	pop	ix
 	ret
-
-public _flash_write
-
-extern _port_unlock
-extern _port_lock

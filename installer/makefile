@@ -2,18 +2,16 @@
 # Makefile Options
 # ----------------------------
 
-COMPRESSED ?= NO
-ARCHIVED ?= NO
-LTO ?= NO
+COMPRESSED = NO
+ARCHIVED = NO
+LTO = NO
+HAS_PRINTF = NO
 
-EXTRA_LDFLAGS += \
-	-i $(call QUOTE_ARG,provide __app_bin = "$(APP_BIN)") \
-	-i $(call QUOTE_ARG,provide __appvar_prefix = "$(VAR_PREFIX)")
+APPVAR_PREFIX = "APP"
+APPVAR_SPLIT_SIZE = 65200
 
-DEPS += $(APP_BIN)
-
-CFLAGS ?= -Wall -Wextra -Oz
-CXXFLAGS ?= -Wall -Wextra -Oz
+CFLAGS = -Wall -Wextra -Oz -DAPPVAR_PREFIX=\"$(APPVAR_PREFIX)\" -DAPPVAR_SPLIT_SIZE=$(APPVAR_SPLIT_SIZE)
+CXXFLAGS = -Wall -Wextra -Oz -DAPPVAR_PREFIX=\"$(APPVAR_PREFIX)\" -DAPPVAR_SPLIT_SIZE=$(APPVAR_SPLIT_SIZE)
 
 # ----------------------------
 
