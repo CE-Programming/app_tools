@@ -2,6 +2,7 @@
 # Makefile Options
 # ----------------------------
 
+NAME = INSTALL
 COMPRESSED = NO
 ARCHIVED = NO
 LTO = NO
