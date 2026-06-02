@@ -44,11 +44,11 @@ _port_setup:
 
 port_setup:
 	di
-	ld	b,1
 	ld	hl,port_reloc
 	ld	bc,port_reloc.size
 	ld	de,___port_reloc
 	ldir
+	ld	b,1
 	or	a,a
 	sbc	hl,hl
 port_setup.find:
