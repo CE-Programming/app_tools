@@ -61,7 +61,7 @@ static bool check_variable_overlaps(const uint8_t *app_start)
         {
             char appvar_name[10];
 
-            sprintf(name, APPVAR_PREFIX "%u", i);
+            sprintf(appvar_name, APPVAR_PREFIX "%u", i);
 
             if (strncmp(name, appvar_name, length) == 0)
             {
