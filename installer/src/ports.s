@@ -80,7 +80,7 @@ port_reloc:
 	ld bc, $22
 	xor a, a
 
-	.equ ___port_unlock.target, $+1
+	.equ ___port_unlock.target, ___port_reloc + (($+1)-port_reloc)
 	jp 0
 
 	.equ	___port_unlock.unlockfinish, ___port_reloc + ($-port_reloc)
