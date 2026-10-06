@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include <debug.h>
@@ -13,11 +14,17 @@
 #include "ports.h"
 
 #define MAX_APPVARS 99
+#define MAX_DESCRIPTION 64
+
+#define APPS_START ((uint8_t *)0x3b0000)
+#define APP_VALID 0x81
+#define APP_NAME_OFFSET (256 + 3)
+#define APP_CODE_OFFSET 0x112
 
 enum
 {
     SUCCESS,
-    ALREADY_INSTALLED,
+    CANCELLED,
     MISSING_VAR,
     PORT_SETUP_FAILED,
     NO_SPACE,
@@ -31,7 +38,123 @@ struct appvar
 };
 
 static struct appvar appvars[MAX_APPVARS];
+static struct appvar *last_appvar;
+static uint24_t app_size;
 static char app_name[10];
+
+static int load_appvars(void)
+{
+    struct appvar *appvar = &appvars[0];
+
+    app_size = 0;
+
+    for (uint8_t i = 0; i < MAX_APPVARS; ++i)
+    {
+        char name[10];
+        void *data;
+        const int namelen = sprintf(name, APPVAR_PREFIX "%u", i);
+
+        if (!os_ChkFindSym(OS_TYPE_APPVAR, name, NULL, &data))
+            return MISSING_VAR;
+
+        uint8_t *d = data;
+
+        if (d < os_RamStart)
+            d += 10 + namelen;
+
+        appvar->size = *(uint16_t*)d;
+        appvar->data = d + 2;
+        appvar->app_offset = app_size;
+
+        /* first appvar contains app name */
+        if (i == 0)
+        {
+            strncpy(app_name, (const char *)(appvar->data + APP_NAME_OFFSET), sizeof app_name - 1);
+            dbg_printf("App %s\n", app_name);
+        }
+
+        dbg_printf("AppVar %u (%s, %u bytes)\n", i, name, (uint24_t)appvar->size);
+
+        app_size += appvar->size;
+
+        if (appvar->size != APPVAR_SPLIT_SIZE)
+            break;
+
+        appvar++;
+    }
+
+    last_appvar = appvar;
+
+    return SUCCESS;
+}
+
+/* Returns the start of the installed app with the given name, skipping deleted apps. */
+static uint8_t *find_app(const char *name)
+{
+    uint8_t *app = APPS_START;
+
+    for (;;)
+    {
+        const uint24_t size = *(uint24_t *)(app - sizeof(uint24_t));
+
+        if (size == 0xFFFFFF)
+            return NULL;
+
+        app -= sizeof(uint24_t) + size;
+
+        if (*app == APP_VALID && strncmp((const char *)app + APP_NAME_OFFSET, name, 8) == 0)
+            return app;
+    }
+}
+
+static const uint8_t *installed_app;
+
+static uint8_t installed_byte(uint24_t offset)
+{
+    return installed_app[offset];
+}
+
+static uint8_t new_byte(uint24_t offset)
+{
+    for (struct appvar *appvar = &appvars[0]; appvar <= last_appvar; appvar++)
+    {
+        if (offset < appvar->app_offset + appvar->size)
+            return appvar->data[offset - appvar->app_offset];
+    }
+
+    return 0;
+}
+
+/* Copies the description that follows the C app header, or an empty string if there is none. */
+static void read_description(char *description, uint8_t (*byte)(uint24_t))
+{
+    uint24_t code = 256 + (byte(APP_CODE_OFFSET) | byte(APP_CODE_OFFSET + 1) << 8 | (uint24_t)byte(APP_CODE_OFFSET + 2) << 16);
+    uint24_t offset = code + 6;
+
+    description[0] = '\0';
+
+    if (byte(code) != 0x00 || byte(code + 1) != 0xC3)
+        return;
+
+    switch (byte(code + 5))
+    {
+        case 1:
+            offset += 2 + byte(offset) * byte(offset + 1);
+            break;
+        case 2:
+            break;
+        default:
+            return;
+    }
+
+    for (uint8_t i = 0; i < MAX_DESCRIPTION - 1; ++i)
+    {
+        if (!(description[i] = byte(offset + i)))
+            return;
+    }
+
+    description[MAX_DESCRIPTION - 1] = '\0';
+}
 
 static bool check_variable_overlaps(const uint8_t *app_start)
 {
@@ -75,7 +198,7 @@ static bool check_variable_overlaps(const uint8_t *app_start)
                     return false;
                 }
                 ours = true;
-                break; 
+                break;
             }
         }
 
@@ -99,64 +222,19 @@ static void *pmin(void *a, void *b)
     return a < b ? a : b;
 }
 
-static int install(void)
+static int install(uint8_t *replace)
 {
-    uint24_t app_size = 0;
+    int error = load_appvars();
+
+    if (error)
+        return error;
 
     if (port_setup())
     {
         return PORT_SETUP_FAILED;
     }
 
-    struct appvar *appvar = &appvars[0];
-    for (uint8_t i = 0; i < MAX_APPVARS; ++i)
-    {
-        char name[10];
-        void *data;
-        const int namelen = sprintf(name, APPVAR_PREFIX "%u", i);
-
-        if (os_ChkFindSym(OS_TYPE_APPVAR, name, NULL, &data))
-        {
-            uint8_t *d = data;
-
-            if (d < os_RamStart)
-            {
-                d += 10 + namelen;
-            }
-        
-            appvar->size = *(uint16_t*)d;
-            appvar->data = d + 2;
-            appvar->app_offset = app_size;
-
-            /* first appvar contains app name */
-            if (i == 0)
-            {
-                strncpy(app_name, (const char *)(appvar->data + 256 + 3), sizeof app_name);
-
-                dbg_printf("App %s\n", app_name);
-
-                if (os_FindAppStart(app_name))
-                {
-                    return ALREADY_INSTALLED;
-                }
-            }
-
-            dbg_printf("AppVar %u (%s, %u bytes)\n", i, name, (uint24_t)appvar->size);
-
-            app_size += appvar->size;
-
-            if (appvar->size != APPVAR_SPLIT_SIZE)
-            {
-                break;
-            }
-
-            appvar++;
-        }
-        else
-        {
-            return MISSING_VAR;
-        }
-    }
+    struct appvar *appvar = last_appvar;
 
     /* size at end of application stored in flash */
     appvar->size += sizeof(uint24_t);
@@ -171,6 +249,13 @@ static int install(void)
         return NO_SPACE;
     }
 
+    if (replace)
+    {
+        dbg_printf("Deleting old app at %p\n", replace);
+        delete_app(replace);
+    }
+
+    os_ClrHome();
     os_PutStrFull("Installing: ");
     os_PutStrFull(app_name);
     os_NewLine();
@@ -261,43 +346,89 @@ void delete_vars(void)
 int main(int argc, char **argv)
 {
     int error;
+    uint8_t *installed = NULL;
 
     (void)argc;
 
     os_ClrHome();
 
-    error = install();
+    error = load_appvars();
+
+    if (!error && (installed = find_app(app_name)))
+    {
+		char description[MAX_DESCRIPTION];
+
+		os_PutStrFull(app_name);
+		os_PutStrFull(" is installed.");
+		os_NewLine();
+		os_NewLine();
+
+		installed_app = installed;
+		read_description(description, installed_byte);
+		os_PutStrFull("Old: ");
+		os_PutStrFull(description);
+		os_NewLine();
+
+		read_description(description, new_byte);
+		os_PutStrFull("New: ");
+		os_PutStrFull(description);
+		os_NewLine();
+		os_NewLine();
+
+		os_PutStrFull("Replace it?");
+		os_NewLine();
+
+        if (!confirm())
+        {
+            os_ClrHome();
+            return CANCELLED;
+        }
+    }
+
+    if (!error)
+        error = install(installed);
+
+    if (error == NO_SPACE)
+    {
+        if (installed)
+            delete_app(installed);
+
+        os_ClrHome();
+		os_PutStrFull("Not enough free archive.");
+		os_NewLine();
+		os_PutStrFull("Garbage collecting may");
+		os_NewLine();
+		os_PutStrFull("free enough space.");
+		os_NewLine();
+		os_NewLine();
+		os_PutStrFull("Press any key.");
+
+		while (os_GetCSC());
+		while (!os_GetCSC());
+
+        garbage_collect();
+        error = install(NULL);
+    }
 
     os_ClrHome();
 
     switch (error)
     {
         case SUCCESS:
-            os_PutStrFull("Successfully installed.");
+            os_PutStrFull(installed ? "Successfully updated." : "Successfully installed.");
             os_NewLine();
             os_PutStrFull("App: ");
             os_PutStrFull(app_name);
             os_NewLine();
             os_NewLine();
             os_PutStrFull("Delete installer files?");
-            if (confirm_delete_vars())
+            os_NewLine();
+            if (confirm())
             {
                 delete_var(argv[0], OS_TYPE_PROT_PRGM);
                 delete_vars();
             }
             return SUCCESS;
-            break;
-
-        case ALREADY_INSTALLED:
-            os_PutStrFull("Already installed.");
-            os_NewLine();
-            os_PutStrFull("App: ");
-            os_PutStrFull(app_name);
-            os_NewLine();
-            os_NewLine();
-            os_PutStrFull("Delete app from the");
-            os_NewLine();
-            os_PutStrFull("mem menu to reinstall.");
             break;
 
         case MISSING_VAR:
@@ -316,10 +447,18 @@ int main(int argc, char **argv)
             os_PutStrFull("Install failed.");
             os_NewLine();
             os_PutStrFull("Out of archive space.");
-            os_NewLine();
-            os_PutStrFull("Try running the");
-            os_NewLine();
-            os_PutStrFull("GarbageCollect command.");
+            if (installed)
+            {
+                os_NewLine();
+                os_NewLine();
+                os_PutStrFull("The old version was");
+                os_NewLine();
+                os_PutStrFull("deleted. Free some space");
+                os_NewLine();
+                os_PutStrFull("and run the installer");
+                os_NewLine();
+                os_PutStrFull("again.");
+            }
             break;
     }
 

@@ -1,9 +1,6 @@
 	.assume	adl=1
 	.section	.text
 
-	.global	_os_FindAppStart
-	.equ	_os_FindAppStart, 0x21100
-
 	.global _find_last_app
 _find_last_app:
 	ld	hl,$3b0000		; applications start here
@@ -76,8 +73,8 @@ _fix_relocations:
 	pop	ix
 	ret
 
-	.global _confirm_delete_vars
-	.type _confirm_delete_vars, @function
+	.global _confirm
+	.type _confirm, @function
 
 	.equ	ti.flags, 0xD00080
 	.equ	ti.curRow, 0xD00595
@@ -92,16 +89,28 @@ _fix_relocations:
 	.equ	ti.skClear, 0x0F
 	.equ	ti.skEnter, 0x09
 
-_confirm_delete_vars:
+; Shows Yes/No on the current row, returning 1 for Yes and 0 for No.
+_confirm:
 	ld	iy, ti.flags
-	ld	a, 4
-	ld	(ti.curRow), a
+	ld	a, (ti.curRow)
+	push	af
 	res	ti.textInverse, (iy + ti.textFlags)
 .L.update_display:
+	pop	af
+	push	af
+	ld	(ti.curRow), a
+	ld	b, a
+	add	a, a
+	add	a, a
+	add	a, b
+	add	a, a
+	add	a, a
+	add	a, 37
+	ld	b, a
+	add	a, 17
+	ld	c, a
 	ld	hl, 72
 	ld	de, 253
-	ld	b, 117
-	ld	c, 134
 	call	ti.ClearRect
 	ld	hl, 6
 	ld.sis	(ti.curCol & $FFFF), hl
@@ -124,11 +133,15 @@ _confirm_delete_vars:
 	jr	z, .L.exit
 	cp	a, ti.skEnter
 	jr	nz, .L.get_key
+	pop	bc
 	bit	ti.textInverse, (iy + ti.textFlags)
 	res	ti.textInverse, (iy + ti.textFlags)
 	ld	a, 1
 	ret	z
+	xor	a, a
+	ret
 .L.exit:
+	pop	bc
 	res	ti.textInverse, (iy + ti.textFlags)
 	xor	a, a
 	ret
@@ -136,6 +149,78 @@ _confirm_delete_vars:
 	db	" Yes ", 0
 .L.option_no:
 	db	" No ", 0
+
+	.global _delete_app
+	.type _delete_app, @function
+
+	.equ	ti.DeleteApp, 0x02126C
+
+; Marks the app as deleted; its space is reclaimed when the OS next defragments.
+_delete_app:
+	pop	de
+	pop	hl
+	push	hl
+	push	de
+	ld	iy, ti.flags
+	jp	ti.DeleteApp
+
+	.global _garbage_collect
+	.type _garbage_collect, @function
+
+	.equ	ti.CreateProtProg, 0x021334
+	.equ	ti.ParseInp, 0x020F00
+	.equ	ti.PushErrorHandler, 0x020798
+	.equ	ti.PopErrorHandler, 0x02079C
+	.equ	ti.newDispF, 0x08
+	.equ	ti.allowProgTokens, 1
+	.equ	ti.cmdFlags, 0x0C
+	.equ	ti.cmdExec, 6
+
+; Runs the GarbageCollect command, which asks the user before collecting.
+_garbage_collect:
+	push	ix
+	ld	iy, ti.flags
+	call	.L.delete_gc_prgm
+	ld	a, (iy + ti.newDispF)
+	ld	c, (iy + ti.cmdFlags)
+	push	af
+	push	bc
+	ld	hl, .L.gc_error
+	call	ti.PushErrorHandler
+	ld	hl, .L.gc_prgm
+	call	ti.Mov9ToOP1
+	ld	hl, 2
+	call	ti.CreateProtProg
+	inc	de
+	inc	de
+	ld	a, $BB
+	ld	(de), a
+	inc	de
+	ld	a, $CE
+	ld	(de), a
+	set	ti.allowProgTokens, (iy + ti.newDispF)
+	set	ti.cmdExec, (iy + ti.cmdFlags)
+	ld	hl, .L.gc_prgm
+	call	ti.Mov9ToOP1
+	call	ti.ParseInp
+	call	ti.PopErrorHandler
+.L.gc_error:
+	ld	iy, ti.flags
+	pop	bc
+	pop	af
+	ld	(iy + ti.newDispF), a
+	ld	(iy + ti.cmdFlags), c
+	call	.L.delete_gc_prgm
+	pop	ix
+	ret
+.L.delete_gc_prgm:
+	ld	hl, .L.gc_prgm
+	call	ti.Mov9ToOP1
+	call	ti.ChkFindSym
+	ret	c
+	jp	ti.DelVarArc
+.L.gc_prgm:
+	db	6, "#GC", 0, 0, 0, 0, 0
 
 	.global _delete_var
 	.type _delete_var, @function
